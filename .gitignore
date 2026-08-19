@@ -1,10 +1,120 @@
-# Python-generated files
-__pycache__/
-*.py[oc]
-build/
-dist/
-wheels/
-*.egg-info
+# ============================================================
+# AlgoRecall
+# ============================================================
+
+
+# ------------------------------------------------------------
+# Environment variables / secrets
+# ------------------------------------------------------------
+.env
+.env.*
+!.env.example
+
+
+# ------------------------------------------------------------
+# Python / FastAPI backend
+# ------------------------------------------------------------
 
 # Virtual environments
-.venv
+.venv/
+venv/
+env/
+
+# Python bytecode / caches
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Python tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.pyright/
+.coverage
+.coverage.*
+htmlcov/
+
+# Build / packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+
+# ------------------------------------------------------------
+# React / Vite frontend
+# ------------------------------------------------------------
+
+# Dependencies
+node_modules/
+
+# Build output
+frontend/dist/
+
+# Vite cache
+.vite/
+
+# Frontend test / coverage output
+coverage/
+
+# TypeScript incremental build info
+*.tsbuildinfo
+
+
+# ------------------------------------------------------------
+# Logs
+# ------------------------------------------------------------
+*.log
+logs/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# ------------------------------------------------------------
+# IDE / Editor
+# ------------------------------------------------------------
+
+# VS Code local settings
+.vscode/
+
+# JetBrains
+.idea/
+
+# Vim
+*.swp
+*.swo
+*~
+
+
+# ------------------------------------------------------------
+# Operating system files
+# ------------------------------------------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+
+# ------------------------------------------------------------
+# Local database / runtime files
+# ------------------------------------------------------------
+*.db
+*.sqlite
+*.sqlite3
+
+
+# ------------------------------------------------------------
+# Temporary files
+# ------------------------------------------------------------
+tmp/
+temp/
+*.tmp
+*.bak

@@ -1,5 +1,5 @@
 [project]
-name = "algorecall"
+name = "algorecall-backend"
 version = "0.1.0"
 description = "A repetition learning web app for algorithms and datastructures"
 readme = "README.md"
