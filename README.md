@@ -1,361 +1,224 @@
-# Concept
+# AlgoRecall
 
-**AlgoRecall** is a web application for collecting, reviewing, and learning from coding-problem submissions across platforms such as LeetCode and Codeforces.
+AlgoRecall is a web application for collecting, organizing, and actively reviewing coding problems and submissions from platforms such as LeetCode and Codeforces.
 
-The core idea is to separate the **shared problem/domain data** from the **user-owned code artifacts**:
+The goal is to turn solved or attempted coding problems into a personal learning system instead of a passive submission history. AlgoRecall combines automatically captured submissions with personal organization, spaced repetition, and later an LLM-based tutor.
 
-- **PostgreSQL is the source of truth for AlgoRecall's domain model and application state.**
-- **GitHub is used as external storage for user-owned submission code and detailed submission notes.**
+## Concept
 
-A problem is stored only once per source/platform. For example, LeetCode problem `#200` exists only once in the `Problem` table, regardless of how many AlgoRecall users have solved it.
+AlgoRecall is built around three kinds of data:
 
-The relationship between a user and a problem is represented by a separate `UserProblem` entity. This does not duplicate the problem itself; it stores user-specific information about that problem, such as:
+- **Canonical problem data** is stored centrally in PostgreSQL and shared across users.
+- **User-specific application state** such as confidence, comments, tags, submission metadata, and later review history is stored in PostgreSQL.
+- **User-owned submission artifacts** such as source code and detailed notes are stored in a dedicated GitHub repository owned by the user.
 
-- status (`attempted`, `solved`, ...)
-- confidence
-- comments
-- personal labels
-- review state/history
+PostgreSQL is the source of truth for the AlgoRecall domain model. GitHub acts as external storage for the user's code and detailed notes.
 
-A user may have multiple submissions for the same problem. These are represented as `Submission` entities linked to `UserProblem`.
+## Core Submission Flow
 
-The `Submission` table stores the factual/structured information about a submission, for example:
+A central goal of AlgoRecall is to capture submissions from supported coding platforms automatically.
 
-- internal submission ID
-- related `UserProblem`
-- external submission ID, if available
-- submission status
-- programming language
-- submission timestamp
-- GitHub repository/path reference
-- optional complexity metadata
-
-The actual source code and detailed submission notes are stored in the user's GitHub repository rather than duplicated as authoritative content in PostgreSQL.
-
-A GitHub file is therefore an **artifact referenced by a database entity**, not the identity of that entity.
-
-Example:
+The planned flow is:
 
 ```text
-PostgreSQL
-
-Submission #481
-- user_problem_id: 52
-- status: accepted
-- language: python
-- github_path: leetcode/two-sum/submission-481.py
+User submits code on LeetCode / Codeforces / ...
+                    │
+                    ▼
+      source-specific integration 
+        e.g. browser extension
+        identifies the submission
+                    │
+                    ▼
+            AlgoRecall Backend
+             /             \
+            /               \
+           ▼                 ▼
+     PostgreSQL           GitHub
+  problem/submission     source code
+      metadata           + detailed notes
 ```
 
-```text
-GitHub
+A browser extension is one possible mechanism for detecting submissions directly on supported platforms and forwarding the relevant information to the AlgoRecall backend.
 
+The backend then:
+
+1. identifies or creates the canonical problem,
+2. stores the submission metadata in PostgreSQL,
+3. writes the submission source code into the user's AlgoRecall GitHub repository,
+4. stores the GitHub repository/path reference with the submission.
+
+The platform integration is intentionally separated from the core domain so AlgoRecall can support multiple sources without depending on one specific platform implementation.
+
+## GitHub Integration
+
+Users authenticate with GitHub.
+
+During onboarding, AlgoRecall initializes a dedicated repository in the user's GitHub account for storing AlgoRecall content. The user does not need to create this repository manually.
+
+Example structure:
+
+```text
 algorecall/
 └── leetcode/
-    └── 1-two-sum/
-        ├── submission-481.py
-        └── submission-481.md
+    └── two-sum/
+        ├── submission-1234.py
+        └── submission-1234.md
+        └── submission-6789.py
+        └── submission-6789.md
 ```
 
-If a user manually deletes or changes a submission artifact on GitHub, the corresponding database entity does not automatically cease to exist. AlgoRecall can instead mark the GitHub artifact as unavailable and show something such as:
+The repository remains owned by the user.
 
-> Submission exists, but the associated GitHub content could not be found.
+## Features
 
-The user can then explicitly decide whether the submission should also be removed from AlgoRecall.
+### Submission Tracking
 
-GitHub webhooks can later be used to synchronize external repository changes with AlgoRecall. They may trigger:
+- Detect submissions on supported coding platforms.
+- Import submission metadata automatically.
+- Store multiple submissions for the same problem.
+- Track submission result and programming language.
+- Store source code in the user's AlgoRecall GitHub repository.
+- Preserve links between database submissions and GitHub artifacts.
 
-- insertion of newly discovered submissions
-- updates to existing submission references/state
-- marking deleted GitHub artifacts as missing
+### Problem Library
 
-Webhooks are therefore a synchronization mechanism, while PostgreSQL remains authoritative for AlgoRecall's domain state.
+- Store each problem once per source/platform.
+- Either display problem content directly inside AlgoRecall or keep link to the original source.
+- Support multiple platforms such as LeetCode and Codeforces.
 
-Problem content is stored in PostgreSQL as well, so that AlgoRecall can display and review problems without depending on GitHub.
 
-The model deliberately separates common problem metadata from source-specific content.
+### Custom Tags
 
-Example:
+Tags are completely user-defined.
 
-```text
-Source
-- id
-- name
+A user can create tags independently and assign the same tag to Problems or Submissions.
 
-Problem
-- id
-- source_id
-- external_id
-- problem_title
-- slug
-- source_url
 
-LeetcodeProblemContent
-- problem_id
+### Recall and Spaced Repetition
+
+Recall is intended to become one of AlgoRecall's central features.
+
+A review session should initially show the problem without revealing the user's previous code.
+
+The user can first try to recall:
+
+- the core approach
+- relevant algorithms or data structures
+- important edge cases
+- expected complexity
+- try to solve the problem again on the given platform 
+
+Afterwards, the previous submission and notes can be revealed.
+
+The user rates how well the problem was remembered, and AlgoRecall schedules the next review.
+
+### Search and Filtering
+
+The user should be able to query his knowledge base using a variaty of parameters:
+
+- source (LeetCode, Codeforces...)
 - difficulty
-- description
-- examples
-- constraints
-
-CodeforcesProblemContent
-- problem_id
-- source-specific fields...
-```
-
-The pair `(source_id, external_id)` must be unique so that the same problem from the same platform can only exist once.
-
-Source-specific content tables allow AlgoRecall to support platforms with different problem structures without forcing all platform-specific fields into one generic table.
-
-The current core relationships are conceptually:
-
-```text
-Source 1 ───── n Problem
-
-Problem 1 ───── 0..1 LeetcodeProblemContent
-Problem 1 ───── 0..1 CodeforcesProblemContent
-                 ...
-
-User 1 ───── n UserProblem
-Problem 1 ───── n UserProblem
-
-UserProblem 1 ───── n Submission
-UserProblem 1 ───── n Review
-```
-
-The intended architecture is therefore:
-
-```text
-                         GitHub
-                  user-owned artifacts
-                  code + detailed notes
-                           ▲
-                           │
-                           │ references / sync
-                           │
-React ─────── FastAPI ─────┼───── PostgreSQL
-                           │       source of truth
-                           │       for AlgoRecall
-                           │
-                     GitHub Webhooks
-```
-
-GitHub authentication should later be used for user login and repository access. AlgoRecall should create or connect to a dedicated repository in the user's own GitHub account.
-
-The application should not depend on LeetCode or any other single problem platform as its foundation. External platforms are treated as sources that can later feed problems and submissions into the same domain model.
-
-
-# Features
-
-## Core problem library
-
-- Store each coding problem once per source/platform.
-- Support multiple sources such as LeetCode and Codeforces.
-- Store shared problem metadata in PostgreSQL.
-- Store source-specific problem content in dedicated source-specific tables.
-- Display the problem directly inside AlgoRecall.
-- Keep a link back to the original source.
-
-## User-specific problem state
-
-Each user can maintain their own relationship to a shared problem through `UserProblem`.
-
-Planned fields/features include:
-
-- attempted/solved status
-- confidence rating
-- personal comment
-- personal labels
-- timestamps
-- recall/review state
-
-The same `Problem` can therefore be shared by all users while every user keeps independent learning state.
-
-## Submissions
-
-Users can have multiple submissions per problem.
-
-A submission can contain structured metadata such as:
-
+- user status
+- confidence
+- custom tags
+- language
 - submission status
-- language
-- external submission ID
-- submission timestamp
-- time complexity
-- space complexity
-- GitHub artifact path/reference
-
-`Submission` should be linked to `UserProblem` rather than duplicating `user_id` and `problem_id`.
-
-Example:
-
-```text
-User
- └── UserProblem
-      ├── Submission #1
-      ├── Submission #2
-      ├── Submission #3
-      └── Review history
-```
-
-
-## GitHub-backed user content
-
-AlgoRecall stores user-created submission artifacts in a repository owned by the user.
-
-Examples:
-
-- source code
-- detailed solution notes
-- explanations
-- implementation-specific observations
-
-GitHub provides:
-
-- user ownership of their code
-- version history
-- commits
-- portability outside AlgoRecall
-- direct access to stored solutions
-
-PostgreSQL stores references to these artifacts but remains authoritative for the existence and metadata of AlgoRecall submissions.
-
-## GitHub synchronization
-
-Later, GitHub webhooks can synchronize repository changes back into AlgoRecall.
-
-Possible cases:
-
-- a new submission file appears → create/update a `Submission`
-- an existing file changes → update cached/reference information
-- a file is deleted → mark its artifact as missing
-- a repository/path changes → reconcile the stored reference
-
-Deleting a GitHub artifact should not automatically delete the corresponding submission from PostgreSQL.
-
-AlgoRecall can instead show the missing state and allow the user to explicitly remove the database record.
-
-## Recall and spaced repetition
-
-A central feature of AlgoRecall is reviewing previously solved problems.
-
-A separate `Review` entity should store review history instead of only keeping a single `last_reviewed` value.
-
-Possible structure:
-
-```text
-Review
-- id
-- user_problem_id
-- reviewed_at
-- rating
-- next_review_at
-```
-
-The application can then provide a daily review queue such as:
-
-```text
-Today's Reviews
-
-1. Number of Islands
-2. LRU Cache
-3. Merge Intervals
-4. Course Schedule
-```
-
-During a recall session, AlgoRecall should initially show the problem without immediately revealing the old submission.
-
-The user can first try to remember:
-
-- the core idea
-- the relevant algorithm/data structure
-- the expected complexity
-- edge cases
-
-Afterwards the user can reveal their previous submission and notes.
-
-The user rates how well the problem was remembered, and AlgoRecall calculates the next review date.
-
-A simple first version may use intervals such as:
-
-```text
-Forgot       → review tomorrow
-Difficult    → review in 3 days
-Remembered   → review in 7 days
-Easy         → review in 21 days
-```
-
-This can later be replaced by a more sophisticated spaced-repetition algorithm.
-
-## Tags and personal labels
-
-Tags and labels still need to be modeled explicitly.
-
-They should likely be separated into two concepts:
-
-- **Problem tags**: objective/problem-level concepts such as `Graph`, `DFS`, `Array`, `Dynamic Programming`
-- **User labels**: personal labels such as `redo`, `hard-for-me`, `interview`, `favorite`
-
-Both should be modeled relationally through separate tables/join tables rather than stored as unstructured sets if they need to be queried efficiently.
-
-## Search and filtering
-
-AlgoRecall should later allow filtering by attributes such as:
-
-- source
-- difficulty
-- problem tags
-- personal labels
-- status
-- confidence
 - due-for-review state
-- language
-- submission result
 
-## LLM tutor
+### LLM Tutor
 
-A later phase can add an LLM-based tutor that uses the user's AlgoRecall context.
+A later LLM tutor should work with the user's existing AlgoRecall context rather than act as a generic coding assistant.
 
-Potential modes:
+Relevant context may include problem content, previous submissions, GitHub notes, comments, tags, confidence, and review history.
 
-- Socratic hints without revealing the solution
-- interview simulation
-- recall questioning
-- explanation of previous mistakes
-- comparison of multiple submissions
-- identification of recurring algorithmic patterns
+### Backend
 
-The LLM should use relevant context such as:
+- Python
+- FastAPI
+- SQLAlchemy
+- Pydantic
+- PostgreSQL
+- Alembic
+- pytest
+- uv
 
-- problem content
-- previous submissions
-- detailed GitHub notes
-- user comments
-- confidence
-- review history
-- tags/labels
+### Frontend
 
-## External platform integration
+- React
+- TypeScript
+- Vite
 
-AlgoRecall should initially work without automatic platform synchronization.
+### Development Infrastructure
 
-Later integrations may import data from sources such as:
+- Docker / Docker Compose
+- PostgreSQL
+- Adminer
+- GitHub
 
-- LeetCode
-- Codeforces
-- HackerRank
-- other coding platforms
+## Repository Structure
 
-A future flow could be:
+AlgoRecall is developed as a monorepo:
 
 ```text
-Accepted submission on external platform
-        ↓
-integration/import
-        ↓
-store code artifact in user's GitHub repository
-        ↓
-GitHub webhook / import service
-        ↓
-create or update Submission in PostgreSQL
+algorecall/
+├── backend/
+│   ├── app/
+│   │   ├── api/
+│   │   │   └── routes/
+│   │   ├── db/
+│   │   │   ├── models/
+│   │   │   └── session.py
+│   │   ├── schemas/
+│   │   ├── repositories/
+│   │   ├── services/
+│   │   └── main.py
+│   ├── tests/
+│   ├── pyproject.toml
+│   └── uv.lock
+│
+├── frontend/
+│
+├── database/
+│   ├── README.md
+│   └── algorecall_schema.sql
+│
+├── docs/
+│   └── notes.md
+│
+├── docker-compose.yaml
+├── .gitignore
+└── README.md
 ```
 
-The exact integration mechanism must remain separate from the core AlgoRecall domain so that the application continues to function even if an external platform changes or becomes unavailable.
+Database-specific modeling decisions, constraints, and delete behavior are documented separately in `database/README.md`.
+
+## Development Approach
+
+Development is incremental and currently at the beginning.
+
+Current high-level order:
+
+```text
+1. Data model and PostgreSQL schema
+3. SQLAlchemy models and database sessions
+4. FastAPI backend foundation
+5. GitHub authentication
+6. Automatic GitHub repository initialization
+7. Core problem and submission workflows
+8. Submission ingestion from coding platforms
+9. React frontend
+10. Recall / spaced repetition
+11. LLM tutor
+12. Additional platform integrations
+13. Production deployment and hardening
+```
+
+## Current Status
+
+AlgoRecall is currently in the foundation phase.
+
+Established so far:
+
+- application concept and architecture
+- initial relational data model
+- SQLALchemy classes
