@@ -1,4 +1,5 @@
 from app.db.models import AppUser
+from sqlalchemy.orm import Session
 
 def get_user_by_github_id(session: Session, github_id) -> AppUser | None:
     pass

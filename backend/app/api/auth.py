@@ -13,7 +13,8 @@ auth_router = APIRouter(prefix="/auth")
 
 @auth_router.get("/login/github")
 def handle_github_login(request: Request) -> RedirectResponse:
-    # state randomly generated for every login, safed to session and send to github api. Github sends back the state so I can verify that the callback request is legit
+    # state randomly generated for every login, safed to session and send to github api. 
+    # Github sends back the state so I can verify that the callback request is legit
     state = secrets.token_urlsafe(32)
     request.session["oauth_state"] = state
 
@@ -29,10 +30,13 @@ def handle_github_login(request: Request) -> RedirectResponse:
 async def handle_github_callback(request: Request, code: str, state: str, session: Session=Depends(get_session)):
     if state != request.session.pop("oauth_state", None):
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
-
-    github_access_token = await github_oauth.exchange_code_for_token(code)
-    github_user = await github_oauth.get_authenticated_user(github_access_token)
-
+    
+    try:
+        github_access_token = await github_oauth.exchange_code_for_token(code)
+        github_user = await github_oauth.get_authenticated_user(github_access_token)
+    except github_oauth.GitHubOAuthError:
+        raise HTTPException(status_code=400, detail="GitHub authentication failed")
+    
     user = user_service.get_user_by_github_id(session, github_user.id)
     if not user:
         user = user_service.create_user(session, github_user.id, github_user.login, github_user.email)
