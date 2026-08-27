@@ -89,7 +89,7 @@ class AppUser(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True)
     github_id: Mapped[int] = mapped_column(BigInteger, unique=True)
-    github_name: Mapped[str]
+    github_login: Mapped[str]
     github_email: Mapped[str | None]
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
@@ -135,7 +135,7 @@ class GithubRepository(Base):
         ),
         unique=True,
     )
-    github_repository_id: Mapped[int] = mapped_column(BigInteger, nunique=True)
+    github_repository_id: Mapped[int] = mapped_column(BigInteger, unique=True)
     name: Mapped[str]
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
@@ -157,7 +157,7 @@ class Problem(Base):
             "source_id",
             "external_id",
             name="uq_problem_source_external_id",
-        )
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, Identity(), primary_key=True) 
@@ -193,7 +193,7 @@ class LeetcodeProblemContent(Base):
         CheckConstraint(
             "difficulty IN ('easy', 'medium', 'hard')",
             name="ck_leetcode_problem_content_difficulty",
-        )
+        ),
     )
 
     problem_id: Mapped[int] = mapped_column(

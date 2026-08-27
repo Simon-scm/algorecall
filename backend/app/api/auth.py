@@ -5,6 +5,7 @@ from app.integrations.github import github_oauth
 from app.services import user_service
 from app.db.session import get_session
 from sqlalchemy.orm import Session
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 
 
@@ -30,19 +31,54 @@ def handle_github_login(request: Request) -> RedirectResponse:
 async def handle_github_callback(request: Request, code: str, state: str, session: Session=Depends(get_session)):
     if state != request.session.pop("oauth_state", None):
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
-    
+
+    # Get access token and user data from github
     try:
         github_access_token = await github_oauth.exchange_code_for_token(code)
         github_user = await github_oauth.get_authenticated_user(github_access_token)
-    except github_oauth.GitHubOAuthError:
-        raise HTTPException(status_code=400, detail="GitHub authentication failed")
-    
-    user = user_service.get_user_by_github_id(session, github_user.id)
-    if not user:
-        user = user_service.create_user(session, github_user.id, github_user.login, github_user.email)
+    except github_oauth.GitHubOAuthError as exc:
+        raise HTTPException(status_code=400, detail="GitHub authentication failed") from exc
 
+    # Get app user from db - if user does not exists, create a new one
+    try:
+        user = user_service.get_user_by_github_id(session, github_user.id)
+        if not user:
+            user = user_service.create_user(session, github_user.id, github_user.login, github_user.email)      
+    except IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="User already exists") from exc
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Database error") from exc
+
+    # safe user_id as signed artifact in browser session to use for later authentication    
     request.session["user_id"] = user.id
 
+    return RedirectResponse(
+        url="http://127.0.0.1:8000/auth/me", # TODO: Change to fronted closed (in app) route when in prod
+        status_code=302
+    )
+
+@auth_router.get("/me")
+def get_current_user(request: Request, session: Session=Depends(get_session)):
+    session_user_id = request.session.get("user_id", None)
+    if session_user_id is None:
+        raise HTTPException(status_code=401, detail="Not athenticated")
+
+    try:
+        user = user_service.get_user_by_id(session, session_user_id)
+    except SQLAlchemyError as exc:
+        raise HTTPException(status_code=500, detail="Database error while retrieving user") from exc
+
+    if user is None:
+        request.session.clear()
+        raise HTTPException(status_code=401, detail="User not found")
+
+    return {
+        "id": user.id,
+        "github_id": user.github_id,
+        "github_login": user.github_login,
+        "github_email": user.github_email,
+    }
     
+
 
     
