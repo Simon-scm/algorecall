@@ -3,17 +3,33 @@ from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse
 from app.integrations.github import github_oauth
 from app.services import user_service
-from app.db.session import get_session
+from app.db.session import get_db_session
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from app.config import FRONTEND_URL_AFTER_LOGIN
 
 
 
 auth_router = APIRouter(prefix="/auth")
 
+# TODO:
+# - log out
+# - new oauth required (routing) when access_token fails (expired)
 
 @auth_router.get("/login/github")
-def handle_github_login(request: Request) -> RedirectResponse:
+def handle_github_login(request: Request, db_session: Session=Depends(get_db_session)) -> RedirectResponse:
+    # check if user/browser has active session cookie
+    user_id = request.session.get("user_id")
+
+    if user_id is not None:
+        user = user_service.get_user_by_id(user_id)
+        if user is not None:
+            return RedirectResponse(
+                url=FRONTEND_URL_AFTER_LOGIN
+            )
+        request.session.clear()
+
+    # if no session is active or session_user_id is not in db -> start auth flow
     # state randomly generated for every login, safed to session and send to github api. 
     # Github sends back the state so I can verify that the callback request is legit
     state = secrets.token_urlsafe(32)
@@ -27,8 +43,9 @@ def handle_github_login(request: Request) -> RedirectResponse:
     )
 
 
+
 @auth_router.get("/github/callback")
-async def handle_github_callback(request: Request, code: str, state: str, session: Session=Depends(get_session)):
+async def handle_github_callback(request: Request, code: str, state: str, db_session: Session=Depends(get_db_session)):
     if state != request.session.pop("oauth_state", None):
         raise HTTPException(status_code=400, detail="Invalid OAuth state")
 
@@ -36,14 +53,14 @@ async def handle_github_callback(request: Request, code: str, state: str, sessio
     try:
         github_access_token = await github_oauth.exchange_code_for_token(code)
         github_user = await github_oauth.get_authenticated_user(github_access_token)
-    except github_oauth.GitHubOAuthError as exc:
+    except github_oauth.GithubOAuthError as exc:
         raise HTTPException(status_code=400, detail="GitHub authentication failed") from exc
 
     # Get app user from db - if user does not exists, create a new one
     try:
-        user = user_service.get_user_by_github_id(session, github_user.id)
+        user = user_service.get_user_by_github_id(db_session, github_user.id)
         if not user:
-            user = user_service.create_user(session, github_user.id, github_user.login, github_user.email)      
+            user = user_service.create_user(db_session, github_user.id, github_user.login, github_user.email)      
     except IntegrityError as exc:
         raise HTTPException(status_code=409, detail="User already exists") from exc
     except SQLAlchemyError as exc:
@@ -53,18 +70,20 @@ async def handle_github_callback(request: Request, code: str, state: str, sessio
     request.session["user_id"] = user.id
 
     return RedirectResponse(
-        url="http://127.0.0.1:8000/auth/me", # TODO: Change to fronted closed (in app) route when in prod
+        url=FRONTEND_URL_AFTER_LOGIN, # TODO: Change to fronted closed (in app) route when in prod
         status_code=302
     )
 
+
+
 @auth_router.get("/me")
-def get_current_user(request: Request, session: Session=Depends(get_session)):
-    session_user_id = request.session.get("user_id", None)
+def get_current_user(request: Request, db_session: Session=Depends(get_db_session)):
+    session_user_id = request.session.get("user_id")
     if session_user_id is None:
         raise HTTPException(status_code=401, detail="Not athenticated")
 
     try:
-        user = user_service.get_user_by_id(session, session_user_id)
+        user = user_service.get_user_by_id(db_session, session_user_id)
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail="Database error while retrieving user") from exc
 

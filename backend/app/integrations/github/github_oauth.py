@@ -3,13 +3,14 @@ from urllib.parse import urlencode
 from dataclasses import dataclass
 import httpx
 
+
 @dataclass
-class GitHubUser:
+class GithubUser:
     id: int
     login: str
     email: str | None
 
-class GitHubOAuthError(Exception):
+class GithubOAuthError(Exception):
     pass
 
 
@@ -46,20 +47,20 @@ async def exchange_code_for_token(code: str) -> str:
             response.raise_for_status()
 
     except (httpx.RequestError, httpx.HTTPStatusError) as exc:
-        raise GitHubOAuthError("Failed to retrieve GitHub access token") from exc
+        raise GithubOAuthError("Failed to retrieve GitHub access token") from exc
 
     response_data = response.json()
     access_token = response_data.get("access_token")
 
     if access_token is None:
-        raise GitHubOAuthError(
+        raise GithubOAuthError(
             response_data.get("error_description", "GitHub did not return an access token")
         )
 
     return access_token
 
 
-async def get_authenticated_user(github_access_token: str) -> GitHubUser:
+async def get_authenticated_user(github_access_token: str) -> GithubUser:
     headers={
         "Authorization": f"Bearer {github_access_token}",
         "Accept": "application/vnd.github+json",
@@ -75,19 +76,22 @@ async def get_authenticated_user(github_access_token: str) -> GitHubUser:
             response.raise_for_status()
           
     except httpx.HTTPError as exc:
-        raise GitHubOAuthError("Failed to retrieve GitHub user data") from exc
+        raise GithubOAuthError("Failed to retrieve GitHub user data") from exc
 
     response_data = response.json()
     github_id = response_data.get("id")
     github_login = response_data.get("login")
     
     if github_id is None or github_login is None:
-            raise GitHubOAuthError(
+            raise GithubOAuthError(
                 response_data.get("error_description", "GitHub did not return a user")
             )
 
-    return GitHubUser(
+    return GithubUser(
         id=response_data.get("id"),
         login=response_data.get("login"),
         email=response_data.get("email") # Better set None when mail is ""??
     )
+
+
+

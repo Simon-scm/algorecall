@@ -164,14 +164,15 @@ algorecall/
 ├── backend/
 │   ├── app/
 │   │   ├── api/
-│   │   │   └── routes/
 │   │   ├── db/
-│   │   │   ├── models/
+│   │   │   ├── models.py
 │   │   │   └── session.py
-│   │   ├── schemas/
-│   │   ├── repositories/
+│   │   │   └── engine.py
+│   │   ├── integrations/
+│   │   │   └── github/
 │   │   ├── services/
 │   │   └── main.py
+│   │   └── config.py
 │   ├── tests/
 │   ├── pyproject.toml
 │   └── uv.lock

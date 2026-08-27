@@ -4,6 +4,6 @@ from .engine import engine
 
 SessionLocal = sessionmaker(engine)
 
-def get_session() -> Generator[Session, None, None]:
+def get_db_session() -> Generator[Session, None, None]:
     with SessionLocal() as session:
         yield session
