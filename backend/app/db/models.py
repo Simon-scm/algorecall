@@ -106,6 +106,36 @@ class AppUser(Base):
     tags: Mapped[list[Tag]] = relationship(
         back_populates="user"
     )
+    github_credentials: Mapped["GithubCredentials | None"] = relationship(
+        back_populates="user",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
+
+
+class GithubCredentials(Base):
+    __tablename__ = "github_credentials"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True,)
+    user_id: Mapped[int] = mapped_column(
+        BigInteger,
+        ForeignKey(
+            "app_user.id",
+            ondelete="CASCADE",
+        ),
+        nullable=False,
+        unique=True,
+    )
+    access_token: Mapped[str] = mapped_column(Text, nullable=False,)
+    access_token_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False,)
+    refresh_token: Mapped[str] = mapped_column(Text, nullable=False,)
+    refresh_token_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False,)
+    scope: Mapped[str | None] = mapped_column(Text,nullable=True,)
+
+
+    user: Mapped["AppUser"] = relationship(
+        back_populates="github_credentials"
+    )
 
 
 # Problem Source (LeetCode, Codeforces, ...)

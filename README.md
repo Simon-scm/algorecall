@@ -165,11 +165,6 @@ algorecall/
 │   ├── app/
 │   │   ├── api/
 │   │   ├── db/
-│   │   │   ├── models.py
-│   │   │   └── session.py
-│   │   │   └── engine.py
-│   │   ├── integrations/
-│   │   │   └── github/
 │   │   ├── services/
 │   │   └── main.py
 │   │   └── config.py

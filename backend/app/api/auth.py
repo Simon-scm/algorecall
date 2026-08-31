@@ -1,8 +1,7 @@
 import secrets
 from fastapi import APIRouter, Request, HTTPException, Depends
 from fastapi.responses import RedirectResponse
-from app.integrations.github import github_oauth
-from app.services import user_service
+from app.services import user_service, github_oauth_service
 from app.db.session import get_db_session
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
@@ -16,13 +15,15 @@ auth_router = APIRouter(prefix="/auth")
 # - log out
 # - new oauth required (routing) when access_token fails (expired)
 
+# should be contacted by frontend when clicking on login 
 @auth_router.get("/login/github")
 def handle_github_login(request: Request, db_session: Session=Depends(get_db_session)) -> RedirectResponse:
-    # check if user/browser has active session cookie
+    # check if user/browser has active session cookie while user clicks on login
+    # this way user does not have to make github oauth every time he clicks on login
     user_id = request.session.get("user_id")
 
     if user_id is not None:
-        user = user_service.get_user_by_id(user_id)
+        user = user_service.get_user_by_id(db_session, user_id)
         if user is not None:
             return RedirectResponse(
                 url=FRONTEND_URL_AFTER_LOGIN
@@ -35,7 +36,7 @@ def handle_github_login(request: Request, db_session: Session=Depends(get_db_ses
     state = secrets.token_urlsafe(32)
     request.session["oauth_state"] = state
 
-    github_auth_url = github_oauth.build_authorization_url(state=state, scope="read:user")
+    github_auth_url = github_oauth_service.build_authorization_url(state=state, scope="read:user")
 
     return RedirectResponse(
         url=github_auth_url,
@@ -51,9 +52,9 @@ async def handle_github_callback(request: Request, code: str, state: str, db_ses
 
     # Get access token and user data from github
     try:
-        github_access_token = await github_oauth.exchange_code_for_token(code)
-        github_user = await github_oauth.get_authenticated_user(github_access_token)
-    except github_oauth.GithubOAuthError as exc:
+        github_access_token = await github_oauth_service.exchange_code_for_access_token(code)
+        github_user = await github_oauth_service.get_authenticated_user(github_access_token)
+    except github_oauth_service.GithubOAuthError as exc:
         raise HTTPException(status_code=400, detail="GitHub authentication failed") from exc
 
     # Get app user from db - if user does not exists, create a new one
@@ -69,13 +70,14 @@ async def handle_github_callback(request: Request, code: str, state: str, db_ses
     # safe user_id as signed artifact in browser session to use for later authentication    
     request.session["user_id"] = user.id
 
+    # redirect browser to home screen of frontend 
     return RedirectResponse(
         url=FRONTEND_URL_AFTER_LOGIN, # TODO: Change to fronted closed (in app) route when in prod
         status_code=302
     )
 
 
-
+# later requested be frontend to render user data on home screen
 @auth_router.get("/me")
 def get_current_user(request: Request, db_session: Session=Depends(get_db_session)):
     session_user_id = request.session.get("user_id")
@@ -85,9 +87,11 @@ def get_current_user(request: Request, db_session: Session=Depends(get_db_sessio
     try:
         user = user_service.get_user_by_id(db_session, session_user_id)
     except SQLAlchemyError as exc:
+        # TODO: redirect to frontend login page
         raise HTTPException(status_code=500, detail="Database error while retrieving user") from exc
 
     if user is None:
+        # TODO: redirect to frontend login page
         request.session.clear()
         raise HTTPException(status_code=401, detail="User not found")
 
