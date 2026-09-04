@@ -5,6 +5,7 @@ import httpx
 from app.db.models import GithubCredentials
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError, IntegrityError
+from sqlalchemy import select
 import datetime
 
 
@@ -21,10 +22,14 @@ class GithubTokens:
     access_token_expires_at: datetime.datetime
     refresh_token: str
     refresh_token_expires_at: datetime.datetime
+    scope: str | None
 
 
 
 class GithubOAuthError(Exception):
+    pass
+
+class GithubReconnectRequiredError(Exception):
     pass
 
 
@@ -43,7 +48,7 @@ def build_authorization_url(state: str, scope: str) -> str:
 
 
 
-async def exchange_code_for_access_token(db_session, code: str) -> str:
+async def exchange_code_for_access_tokens(code: str) -> GithubTokens:
     data = {
         "client_id": GITHUB_CLIENT_ID,
         "client_secret": GITHUB_CLIENT_SECRET,
@@ -66,18 +71,9 @@ async def exchange_code_for_access_token(db_session, code: str) -> str:
         raise GithubOAuthError("Failed to retrieve GitHub access token") from exc
 
     response_data = response.json()
-    access_token = response_data.get("access_token")
-
-    if access_token is None:
-        raise GithubOAuthError(
-            response_data.get("error_description", "GitHub did not return an access token")
-        )
-
     tokens = transform_response_into_github_tokens(response_data)
 
-    save_tokens(db_session, tokens)
-
-    return access_token
+    return tokens
 
 
 
@@ -118,24 +114,33 @@ async def get_authenticated_user(github_access_token: str) -> GithubUser:
 
 
 
-
-def get_credentials_by_id(db_session, user_id: str) -> GithubCredentials:
-    return db_session.get(GithubCredentials, user_id)
+def get_credentials_by_id(db_session: Session, user_id: int) -> GithubCredentials | None:
+    stmt = select(GithubCredentials).where(GithubCredentials.user_id == user_id)
+    credentials = db_session.execute(stmt).scalar_one_or_none()
+    return credentials
 
 
 
 # TODO: Exception Handling!
-async def get_new_access_token(db_session: Session, user_id: str) -> str :
+async def get_new_access_token(db_session: Session, user_id: int) -> str :
     # retrieve access token and expiring time from db
     github_creds = get_credentials_by_id(db_session, user_id)
 
-    if github_creds.access_token > datetime.datetime.now():
+    if github_creds is None:
+        raise GithubOAuthError("GitHub credentials not found for user")
+
+    if github_creds.access_token_expires_at > datetime.datetime.now(datetime.UTC):
             return github_creds.access_token
+
+    # Error should by acknowledged by the endpoint in which the Github API operation was initiated
+    # Enpoint should return json stating that a reconnect is required
+    if github_creds.refresh_token_expires_at <= datetime.datetime.now(datetime.UTC):
+        raise GithubReconnectRequiredError("GitHub refresh token expired")
 
     # if access token is expired get new one with refresh token 
     new_tokens = await refresh_tokens(github_creds.refresh_token)
 
-    save_tokens(db_session, new_tokens)
+    save_tokens(db_session, new_tokens, user_id)
 
     return new_tokens.access_token
 
@@ -167,12 +172,6 @@ async def refresh_tokens(refresh_token) -> GithubTokens:
             raise GithubOAuthError("Failed to refresh GitHub access token") from exc
     
     response_data = response.json()
-    access_token = response_data.get("access_token")
-
-    if access_token is None:
-        raise GithubOAuthError(
-            response_data.get("error_description", "GitHub did not return an access token")
-        )
     tokens = transform_response_into_github_tokens(response_data)
 
     return tokens
@@ -181,32 +180,44 @@ async def refresh_tokens(refresh_token) -> GithubTokens:
 
 
 # func to force refresh of access token manually
-async def refresh_access_token_for_user(db_session: Session, user_id: str) -> str:
+async def refresh_access_token_for_user(db_session: Session, user_id: int) -> str:
     # get refresh token from db
     github_creds = get_credentials_by_id(db_session, user_id)
+
+    if github_creds is None:
+        raise GithubOAuthError("GitHub credentials not found for user")
 
     # use refresh token to get new access token (and other tokens)
     new_tokens = await refresh_tokens(github_creds.refresh_token)
     
-    save_tokens(db_session, new_tokens)
+    save_tokens(db_session, new_tokens, user_id)
 
     return new_tokens.access_token
 
 
-# TODO: encrypted tokens before saving in db when in prod 
-def save_tokens(db_session: Session, tokens: dict) -> None:
 
-    github_creds = GithubCredentials(
-        access_token = tokens.access_token,
-        access_token_expires_at = tokens.access_token_expires_at,
-        refresh_token = tokens.refresh_token,
-        refresh_token_expires_at = tokens.refresh_token_expires_at
-    )
+def save_tokens_for_user(db_session: Session, user_id: int, tokens: GithubTokens) -> None:
+    save_tokens(db_session, tokens, user_id)
+
+
+
+# TODO: encrypted tokens before saving in db when in prod 
+def save_tokens(db_session: Session, tokens: GithubTokens, user_id: int) -> None:
+    github_creds = get_credentials_by_id(db_session, user_id)
+
+    if github_creds is None:
+        github_creds = GithubCredentials(user_id=user_id)
+        db_session.add(github_creds)
+
+    github_creds.access_token = tokens.access_token
+    github_creds.access_token_expires_at = tokens.access_token_expires_at
+    github_creds.refresh_token = tokens.refresh_token
+    github_creds.refresh_token_expires_at = tokens.refresh_token_expires_at
+    github_creds.scope = tokens.scope
 
     try:
-        db_session.add(github_creds)
         db_session.commit()
-        db_session.refresh()
+        db_session.refresh(github_creds)
 
     except IntegrityError:
         db_session.rollback()
@@ -216,9 +227,34 @@ def save_tokens(db_session: Session, tokens: dict) -> None:
         raise
 
 
-def transform_response_into_github_tokens(response_data: dict) -> GithubTokens:
-    # TODO: check entire response data if values were sent correctly
-    tokens = GithubTokens(
 
+def transform_response_into_github_tokens(response_data: dict) -> GithubTokens:
+    access_token = response_data.get("access_token")
+    refresh_token = response_data.get("refresh_token")
+    access_token_expires_in = response_data.get("expires_in")
+    refresh_token_expires_in = response_data.get("refresh_token_expires_in")
+
+    if access_token is None:
+        raise GithubOAuthError(
+            response_data.get("error_description", "GitHub did not return an access token")
+        )
+
+    if refresh_token is None:
+        raise GithubOAuthError(
+            response_data.get("error_description", "GitHub did not return a refresh token")
+        )
+
+    if access_token_expires_in is None or refresh_token_expires_in is None:
+        raise GithubOAuthError(
+            response_data.get("error_description", "GitHub did not return token expiry data")
+        )
+
+    now = datetime.datetime.now(datetime.UTC)
+
+    return GithubTokens(
+        access_token=access_token,
+        access_token_expires_at=now + datetime.timedelta(seconds=access_token_expires_in),
+        refresh_token=refresh_token,
+        refresh_token_expires_at=now + datetime.timedelta(seconds=refresh_token_expires_in),
+        scope=response_data.get("scope"),
     )
-    return tokens

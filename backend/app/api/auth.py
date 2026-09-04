@@ -11,10 +11,6 @@ from app.config import FRONTEND_URL_AFTER_LOGIN
 
 auth_router = APIRouter(prefix="/auth")
 
-# TODO:
-# - log out
-# - new oauth required (routing) when access_token fails (expired)
-
 # should be contacted by frontend when clicking on login 
 @auth_router.get("/login/github")
 def handle_github_login(request: Request, db_session: Session=Depends(get_db_session)) -> RedirectResponse:
@@ -52,8 +48,8 @@ async def handle_github_callback(request: Request, code: str, state: str, db_ses
 
     # Get access token and user data from github
     try:
-        github_access_token = await github_oauth_service.exchange_code_for_access_token(code)
-        github_user = await github_oauth_service.get_authenticated_user(github_access_token)
+        github_tokens = await github_oauth_service.exchange_code_for_access_tokens(code)
+        github_user = await github_oauth_service.get_authenticated_user(github_tokens.access_token)
     except github_oauth_service.GithubOAuthError as exc:
         raise HTTPException(status_code=400, detail="GitHub authentication failed") from exc
 
@@ -62,11 +58,12 @@ async def handle_github_callback(request: Request, code: str, state: str, db_ses
         user = user_service.get_user_by_github_id(db_session, github_user.id)
         if not user:
             user = user_service.create_user(db_session, github_user.id, github_user.login, github_user.email)      
+        github_oauth_service.save_tokens_for_user(db_session, user.id, github_tokens)
     except IntegrityError as exc:
         raise HTTPException(status_code=409, detail="User already exists") from exc
     except SQLAlchemyError as exc:
         raise HTTPException(status_code=500, detail="Database error") from exc
-
+    
     # safe user_id as signed artifact in browser session to use for later authentication    
     request.session["user_id"] = user.id
 
@@ -102,6 +99,9 @@ def get_current_user(request: Request, db_session: Session=Depends(get_db_sessio
         "github_email": user.github_email,
     }
     
-
+@auth_router.post("/logout")
+def logout(request: Request):
+    request.session.clear()
+    return {"message": "Logged out"}
 
     
