@@ -1,9 +1,11 @@
 from dataclasses import dataclass
+import logging
 
 import httpx
 
 
 GITHUB_CREATE_REPOSITORY_URL = "https://api.github.com/user/repos"
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -13,6 +15,10 @@ class GithubRepositoryData:
 
 
 class GithubApiError(Exception):
+    pass
+
+
+class GithubApiAuthenticationError(GithubApiError):
     pass
 
 
@@ -44,7 +50,22 @@ async def create_repository(
                 headers=headers,
             )
             response.raise_for_status()
-    except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "GitHub create repository failed: status_code=%s response=%s",
+            exc.response.status_code,
+            exc.response.text,
+        )
+        if exc.response.status_code in (401, 403):
+            raise GithubApiAuthenticationError(
+                "GitHub rejected the access token"
+            ) from exc
+        raise GithubApiError("Failed to create GitHub repository") from exc
+    except httpx.RequestError as exc:
+        logger.warning(
+            "GitHub create repository request failed: %s",
+            str(exc),
+        )
         raise GithubApiError("Failed to create GitHub repository") from exc
 
     response_data = response.json()

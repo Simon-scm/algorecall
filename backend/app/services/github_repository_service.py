@@ -5,7 +5,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 
-DEFAULT_REPOSITORY_NAME = "algorecall"
+DEFAULT_REPOSITORY_NAME = "algorecall-repo"
 DEFAULT_REPOSITORY_DESCRIPTION = (
     "Coding problem recall and solution archive managed by algorecall"
 )

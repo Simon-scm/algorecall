@@ -33,11 +33,27 @@ async def initialize_github_repository(
             db_session,
             user_id,
         )
-        repository = await github_repository_service.initialize_repository_for_user(
-            db_session=db_session,
-            user_id=user_id,
-            access_token=access_token,
-        )
+        try:
+            repository = await github_repository_service.initialize_repository_for_user(
+                db_session=db_session,
+                user_id=user_id,
+                access_token=access_token,
+            )
+        except github_api_service.GithubApiAuthenticationError:
+            refreshed_access_token = await github_oauth_service.refresh_access_token_for_user(
+                db_session,
+                user_id,
+            )
+            try:
+                repository = await github_repository_service.initialize_repository_for_user(
+                    db_session=db_session,
+                    user_id=user_id,
+                    access_token=refreshed_access_token,
+                )
+            except github_api_service.GithubApiAuthenticationError as exc:
+                raise github_oauth_service.GithubReconnectRequiredError(
+                    "GitHub rejected refreshed access token"
+                ) from exc
     except github_oauth_service.GithubReconnectRequiredError as exc:
         raise HTTPException(
             status_code=401,
