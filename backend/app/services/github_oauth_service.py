@@ -114,7 +114,7 @@ async def get_authenticated_user(github_access_token: str) -> GithubUser:
 
 
 
-def get_credentials_by_id(db_session: Session, user_id: int) -> GithubCredentials | None:
+def get_credentials_by_user_id(db_session: Session, user_id: int) -> GithubCredentials | None:
     stmt = select(GithubCredentials).where(GithubCredentials.user_id == user_id)
     credentials = db_session.execute(stmt).scalar_one_or_none()
     return credentials
@@ -124,10 +124,10 @@ def get_credentials_by_id(db_session: Session, user_id: int) -> GithubCredential
 # TODO: Exception Handling!
 async def get_new_access_token(db_session: Session, user_id: int) -> str :
     # retrieve access token and expiring time from db
-    github_creds = get_credentials_by_id(db_session, user_id)
+    github_creds = get_credentials_by_user_id(db_session, user_id)
 
     if github_creds is None:
-        raise GithubOAuthError("GitHub credentials not found for user")
+        raise GithubReconnectRequiredError("GitHub credentials not found for user")
 
     if github_creds.access_token_expires_at > datetime.datetime.now(datetime.UTC):
             return github_creds.access_token
@@ -168,7 +168,9 @@ async def refresh_tokens(refresh_token) -> GithubTokens:
 
             response.raise_for_status()
 
-    except (httpx.RequestError, httpx.HTTPStatusError) as exc:
+    except httpx.HTTPStatusError as exc:
+            raise GithubReconnectRequiredError("GitHub refresh token failed") from exc
+    except httpx.RequestError as exc:
             raise GithubOAuthError("Failed to refresh GitHub access token") from exc
     
     response_data = response.json()
@@ -182,10 +184,10 @@ async def refresh_tokens(refresh_token) -> GithubTokens:
 # func to force refresh of access token manually
 async def refresh_access_token_for_user(db_session: Session, user_id: int) -> str:
     # get refresh token from db
-    github_creds = get_credentials_by_id(db_session, user_id)
+    github_creds = get_credentials_by_user_id(db_session, user_id)
 
     if github_creds is None:
-        raise GithubOAuthError("GitHub credentials not found for user")
+        raise GithubReconnectRequiredError("GitHub credentials not found for user")
 
     # use refresh token to get new access token (and other tokens)
     new_tokens = await refresh_tokens(github_creds.refresh_token)
@@ -203,7 +205,7 @@ def save_tokens_for_user(db_session: Session, user_id: int, tokens: GithubTokens
 
 # TODO: encrypted tokens before saving in db when in prod 
 def save_tokens(db_session: Session, tokens: GithubTokens, user_id: int) -> None:
-    github_creds = get_credentials_by_id(db_session, user_id)
+    github_creds = get_credentials_by_user_id(db_session, user_id)
 
     if github_creds is None:
         github_creds = GithubCredentials(user_id=user_id)

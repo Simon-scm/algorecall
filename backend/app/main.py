@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from starlette.middleware.sessions import SessionMiddleware
 from app.config import SESSION_SECRET
 from app.api.auth import auth_router
+from app.api.github import github_router
 
 
 app = FastAPI()
@@ -15,3 +16,4 @@ app.add_middleware(
 
 
 app.include_router(auth_router)
+app.include_router(github_router)

@@ -32,7 +32,7 @@ def handle_github_login(request: Request, db_session: Session=Depends(get_db_ses
     state = secrets.token_urlsafe(32)
     request.session["oauth_state"] = state
 
-    github_auth_url = github_oauth_service.build_authorization_url(state=state, scope="read:user")
+    github_auth_url = github_oauth_service.build_authorization_url(state=state, scope="repo read:user")
 
     return RedirectResponse(
         url=github_auth_url,

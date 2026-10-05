@@ -21,7 +21,7 @@ from fastapi.testclient import TestClient
 from app.api import auth
 from app.db.session import get_db_session
 from app.main import app
-from app.services import github_oauth_service
+from app.services import github_api_service, github_oauth_service, github_repository_service
 
 
 class FakeSession:
@@ -44,7 +44,7 @@ class FakeSession:
         self.rolled_back = True
 
 
-class AuthOAuthTests(unittest.TestCase):
+class AppTestCase(unittest.TestCase):
     def setUp(self):
         app.dependency_overrides[get_db_session] = lambda: FakeSession()
         self.client = TestClient(app, follow_redirects=False)
@@ -68,10 +68,47 @@ class AuthOAuthTests(unittest.TestCase):
             response = self.client.get("/auth/login/github")
 
         self.assertEqual(response.status_code, 302)
-        self.assertEqual(captured["scope"], "read:user")
+        self.assertEqual(captured["scope"], "repo read:user")
         self.assertIn(captured["state"], response.headers["location"])
         return captured["state"]
 
+    def login_test_user(self, app_user):
+        state = self.start_login_and_get_state()
+        github_tokens = github_oauth_service.GithubTokens(
+            access_token="access-token",
+            access_token_expires_at=datetime.now(UTC) + timedelta(hours=1),
+            refresh_token="refresh-token",
+            refresh_token_expires_at=datetime.now(UTC) + timedelta(days=30),
+            scope="repo read:user",
+        )
+        github_user = github_oauth_service.GithubUser(
+            id=app_user.github_id,
+            login=app_user.github_login,
+            email=app_user.github_email,
+        )
+
+        with (
+            patch.object(
+                github_oauth_service,
+                "exchange_code_for_access_tokens",
+                new=AsyncMock(return_value=github_tokens),
+            ),
+            patch.object(
+                github_oauth_service,
+                "get_authenticated_user",
+                new=AsyncMock(return_value=github_user),
+            ),
+            patch.object(auth.user_service, "get_user_by_github_id", return_value=app_user),
+            patch.object(github_oauth_service, "save_tokens_for_user"),
+        ):
+            response = self.client.get(
+                f"/auth/github/callback?code=test-code&state={state}"
+            )
+
+        self.assertEqual(response.status_code, 302)
+
+
+class AuthEndpointTests(AppTestCase):
     def test_github_login_redirect_sets_oauth_state(self):
         self.start_login_and_get_state()
 
@@ -187,6 +224,8 @@ class AuthOAuthTests(unittest.TestCase):
         self.assertEqual(logout_response.json(), {"message": "Logged out"})
         self.assertEqual(logged_out_response.status_code, 401)
 
+
+class GithubOAuthServiceTests(unittest.TestCase):
     def test_transform_response_into_github_tokens(self):
         before = datetime.now(UTC)
 
@@ -218,7 +257,7 @@ class AuthOAuthTests(unittest.TestCase):
         )
         db_session = FakeSession()
 
-        with patch.object(github_oauth_service, "get_credentials_by_id", return_value=None):
+        with patch.object(github_oauth_service, "get_credentials_by_user_id", return_value=None):
             github_oauth_service.save_tokens(db_session, tokens, user_id=42)
 
         self.assertEqual(len(db_session.added), 1)
@@ -233,7 +272,7 @@ class AuthOAuthTests(unittest.TestCase):
 
         with patch.object(
             github_oauth_service,
-            "get_credentials_by_id",
+            "get_credentials_by_user_id",
             return_value=existing_credentials,
         ):
             github_oauth_service.save_tokens(db_session, tokens, user_id=42)
@@ -254,11 +293,175 @@ class AuthOAuthTests(unittest.TestCase):
 
         with patch.object(
             github_oauth_service,
-            "get_credentials_by_id",
+            "get_credentials_by_user_id",
             return_value=expired_credentials,
         ):
             with self.assertRaises(github_oauth_service.GithubReconnectRequiredError):
                 asyncio.run(github_oauth_service.get_new_access_token(FakeSession(), 42))
+
+
+class GithubRepositoryInitEndpointTests(AppTestCase):
+    def test_initialize_repository_requires_login(self):
+        response = self.client.post("/github/repository/init")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.json()["detail"], "Not authenticated")
+
+    def test_initialize_repository_uses_valid_token_and_returns_repository(self):
+        app_user = SimpleNamespace(
+            id=42,
+            github_id=123,
+            github_login="octocat",
+            github_email="octocat@example.com",
+        )
+        repository = SimpleNamespace(
+            id=7,
+            github_repository_id=987,
+            name="algorecall",
+        )
+        self.login_test_user(app_user)
+
+        with (
+            patch.object(auth.user_service, "get_user_by_id", return_value=app_user),
+            patch.object(
+                github_oauth_service,
+                "get_new_access_token",
+                new=AsyncMock(return_value="valid-access-token"),
+            ) as get_new_access_token,
+            patch.object(
+                github_repository_service,
+                "initialize_repository_for_user",
+                new=AsyncMock(return_value=repository),
+            ) as initialize_repository,
+        ):
+            response = self.client.post("/github/repository/init")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "id": 7,
+                "github_repository_id": 987,
+                "name": "algorecall",
+            },
+        )
+        get_new_access_token.assert_awaited_once_with(ANY, 42)
+        initialize_repository.assert_awaited_once_with(
+            db_session=ANY,
+            user_id=42,
+            access_token="valid-access-token",
+        )
+
+    def test_initialize_repository_returns_reconnect_required(self):
+        app_user = SimpleNamespace(
+            id=42,
+            github_id=123,
+            github_login="octocat",
+            github_email=None,
+        )
+        self.login_test_user(app_user)
+
+        with (
+            patch.object(auth.user_service, "get_user_by_id", return_value=app_user),
+            patch.object(
+                github_oauth_service,
+                "get_new_access_token",
+                new=AsyncMock(
+                    side_effect=github_oauth_service.GithubReconnectRequiredError()
+                ),
+            ),
+            patch.object(
+                github_repository_service,
+                "initialize_repository_for_user",
+                new=AsyncMock(),
+            ) as initialize_repository,
+        ):
+            response = self.client.post("/github/repository/init")
+
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(
+            response.json()["detail"],
+            {
+                "code": "github_reconnect_required",
+                "login_url": "/auth/login/github",
+            },
+        )
+        initialize_repository.assert_not_awaited()
+
+
+class GithubRepositoryServiceTests(unittest.TestCase):
+    def test_repository_service_returns_existing_repository_without_github_call(self):
+        existing_repository = SimpleNamespace(
+            id=7,
+            user_id=42,
+            github_repository_id=987,
+            name="algorecall",
+        )
+
+        with (
+            patch.object(
+                github_repository_service,
+                "get_repository_by_user_id",
+                return_value=existing_repository,
+            ),
+            patch.object(
+                github_api_service,
+                "create_repository",
+                new=AsyncMock(),
+            ) as create_repository,
+        ):
+            repository = asyncio.run(
+                github_repository_service.initialize_repository_for_user(
+                    db_session=FakeSession(),
+                    user_id=42,
+                    access_token="valid-access-token",
+                )
+            )
+
+        self.assertIs(repository, existing_repository)
+        create_repository.assert_not_awaited()
+
+    def test_repository_service_creates_and_saves_new_repository(self):
+        db_session = FakeSession()
+        github_repository = github_api_service.GithubRepositoryData(
+            github_repository_id=987,
+            name="algorecall",
+        )
+
+        with (
+            patch.object(
+                github_repository_service,
+                "get_repository_by_user_id",
+                return_value=None,
+            ),
+            patch.object(
+                github_api_service,
+                "create_repository",
+                new=AsyncMock(return_value=github_repository),
+            ) as create_repository,
+        ):
+            repository = asyncio.run(
+                github_repository_service.initialize_repository_for_user(
+                    db_session=db_session,
+                    user_id=42,
+                    access_token="valid-access-token",
+                )
+            )
+
+        create_repository.assert_awaited_once_with(
+            access_token="valid-access-token",
+            name="algorecall",
+            private=True,
+            description=(
+                "Coding problem recall and solution archive managed by algorecall"
+            ),
+        )
+        self.assertIs(repository, db_session.added[0])
+        self.assertEqual(repository.user_id, 42)
+        self.assertEqual(repository.github_repository_id, 987)
+        self.assertEqual(repository.name, "algorecall")
+        self.assertTrue(db_session.committed)
+        self.assertEqual(db_session.refreshed, [repository])
 
 
 if __name__ == "__main__":
