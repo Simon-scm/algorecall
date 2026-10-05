@@ -13,12 +13,16 @@ auth_router = APIRouter(prefix="/auth")
 
 # should be contacted by frontend when clicking on login 
 @auth_router.get("/login/github")
-def handle_github_login(request: Request, db_session: Session=Depends(get_db_session)) -> RedirectResponse:
+def handle_github_login(
+    request: Request,
+    force: bool = False,
+    db_session: Session=Depends(get_db_session),
+) -> RedirectResponse:
     # check if user/browser has active session cookie while user clicks on login
     # this way user does not have to make github oauth every time he clicks on login
     user_id = request.session.get("user_id")
 
-    if user_id is not None:
+    if user_id is not None and not force:
         user = user_service.get_user_by_id(db_session, user_id)
         if user is not None:
             return RedirectResponse(

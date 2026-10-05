@@ -43,7 +43,7 @@ async def initialize_github_repository(
             status_code=401,
             detail={
                 "code": "github_reconnect_required",
-                "login_url": "/auth/login/github",
+                "login_url": "/auth/login/github?force=true",
             },
         ) from exc
     except github_oauth_service.GithubOAuthError as exc:

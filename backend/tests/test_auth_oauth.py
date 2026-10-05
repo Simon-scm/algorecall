@@ -112,6 +112,35 @@ class AuthEndpointTests(AppTestCase):
     def test_github_login_redirect_sets_oauth_state(self):
         self.start_login_and_get_state()
 
+    def test_github_login_force_starts_oauth_for_existing_session(self):
+        app_user = SimpleNamespace(
+            id=42,
+            github_id=123,
+            github_login="octocat",
+            github_email=None,
+        )
+        self.login_test_user(app_user)
+        captured = {}
+
+        def fake_authorization_url(state: str, scope: str) -> str:
+            captured["state"] = state
+            captured["scope"] = scope
+            return f"https://github.test/oauth?state={state}&scope={scope}"
+
+        with (
+            patch.object(auth.user_service, "get_user_by_id", return_value=app_user),
+            patch.object(
+                github_oauth_service,
+                "build_authorization_url",
+                side_effect=fake_authorization_url,
+            ),
+        ):
+            response = self.client.get("/auth/login/github?force=true")
+
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("https://github.test/oauth", response.headers["location"])
+        self.assertIn(captured["state"], response.headers["location"])
+
     def test_callback_creates_session_and_me_resolves_user(self):
         state = self.start_login_and_get_state()
         github_tokens = github_oauth_service.GithubTokens(
@@ -383,7 +412,7 @@ class GithubRepositoryInitEndpointTests(AppTestCase):
             response.json()["detail"],
             {
                 "code": "github_reconnect_required",
-                "login_url": "/auth/login/github",
+                "login_url": "/auth/login/github?force=true",
             },
         )
         initialize_repository.assert_not_awaited()
