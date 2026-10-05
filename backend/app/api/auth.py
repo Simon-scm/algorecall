@@ -69,7 +69,7 @@ async def handle_github_callback(request: Request, code: str, state: str, db_ses
 
     # redirect browser to home screen of frontend 
     return RedirectResponse(
-        url=FRONTEND_URL_AFTER_LOGIN, # TODO: Change to fronted closed (in app) route when in prod
+        url=FRONTEND_URL_AFTER_LOGIN, # TODO: Change to frontend closed (in app) route when in prod
         status_code=302
     )
 

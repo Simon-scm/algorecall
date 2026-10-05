@@ -132,7 +132,7 @@ async def get_new_access_token(db_session: Session, user_id: int) -> str :
     if github_creds.access_token_expires_at > datetime.datetime.now(datetime.UTC):
             return github_creds.access_token
 
-    # Error should by acknowledged by the endpoint in which the Github API operation was initiated
+    # Error should be acknowledged by the endpoint in which the Github API operation was initiated
     # Enpoint should return json stating that a reconnect is required
     if github_creds.refresh_token_expires_at <= datetime.datetime.now(datetime.UTC):
         raise GithubReconnectRequiredError("GitHub refresh token expired")
